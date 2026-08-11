@@ -1,3 +1,16 @@
+# Environment variables (keeps API keys/secrets safe)
 .env
 .env.local
+.env.*.local
+
+# Dependencies
 node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+
+# Editor / System files
+.vscode/
+.DS_Store
+*.local
