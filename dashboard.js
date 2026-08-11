@@ -20,16 +20,20 @@ function escapeHTML(str) {
 
 // --- CROSS-TAB SESSION PROTECTION ---
 window.addEventListener('storage', (event) => {
-  if (event.key === 'currentUser') {
-    if (!event.newValue) {
-      // User logged out in another tab -> kick out immediately
+  // Triggers if currentUser is removed OR if localStorage was cleared completely
+  if (event.key === 'currentUser' || event.key === null) {
+    if (!localStorage.getItem('currentUser')) {
       window.location.href = 'login.html';
-    } else {
-      // Session updated in another tab -> reload page to reflect changes
-      window.location.reload();
     }
   }
 });
+
+// --- LOGOUT HANDLER ---
+window.logout = () => {
+  localStorage.removeItem('currentUser'); // Explicitly remove item to trigger storage event
+  localStorage.clear();
+  window.location.href = 'login.html';
+};
 
 const isAdmin = currentUser.Role === 'admin';
 
