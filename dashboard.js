@@ -1,11 +1,35 @@
 import { supabase } from './connection.js';
 
-// Get current session from LocalStorage
+// 1. Get current session from LocalStorage
 const currentUser = JSON.parse(localStorage.getItem('currentUser'));
 
 if (!currentUser) {
   window.location.href = 'login.html';
 }
+
+// --- XSS SANITIZATION HELPER ---
+function escapeHTML(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// --- CROSS-TAB SESSION PROTECTION ---
+window.addEventListener('storage', (event) => {
+  if (event.key === 'currentUser') {
+    if (!event.newValue) {
+      // User logged out in another tab -> kick out immediately
+      window.location.href = 'login.html';
+    } else {
+      // Session updated in another tab -> reload page to reflect changes
+      window.location.reload();
+    }
+  }
+});
 
 const isAdmin = currentUser.Role === 'admin';
 
@@ -16,12 +40,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function renderUserInfo() {
   const display = document.getElementById('user-display');
-  const roleBadge = isAdmin ? '<span class="badge badge-admin">Admin</span>' : '<span class="badge badge-user">User</span>';
-  display.innerHTML = `${currentUser.Usr_Name || currentUser.Email} ${roleBadge}`;
+  if (!display) return;
+  const roleBadge = isAdmin 
+    ? '<span class="badge badge-admin">Admin</span>' 
+    : '<span class="badge badge-user">User</span>';
+  
+  display.innerHTML = `${escapeHTML(currentUser.Usr_Name || currentUser.Email)} ${roleBadge}`;
 }
 
 async function loadDashboardData() {
   const container = document.getElementById('table-container');
+  if (!container) return;
 
   try {
     let query = supabase.from('Property').select(`
@@ -37,7 +66,6 @@ async function loadDashboardData() {
       )
     `);
 
-    // Non-admin users only see properties assigned to their user ID
     if (!isAdmin) {
       query = query.eq('user_id', currentUser.user_id);
     }
@@ -51,6 +79,7 @@ async function loadDashboardData() {
       return;
     }
 
+    // Build base table framework
     let html = `
       <table>
         <thead>
@@ -63,45 +92,70 @@ async function loadDashboardData() {
             <th>Actions</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="property-table-body"></tbody>
+      </table>
     `;
 
-    properties.forEach(prop => {
-      const manager = prop.Users ? `${prop.Users.Usr_Name} ${prop.Users.Usr_Surname}` : 'Unassigned';
-      
-      html += `
-        <tr>
-          <td><strong>${prop.Name_Property}</strong></td>
-          <td>${prop.Property_Type || 'Cell Tower'}</td>
-          <td>R ${prop.Valuation ? prop.Valuation.toLocaleString() : '0'}</td>
-          <td>${prop.Description || '-'}</td>
-          <td>${manager}</td>
-          <td>
-            <button class="btn-primary" style="padding: 0.3rem 0.6rem; font-size: 0.85rem;" 
-                onclick="openEditModal(${prop.id}, '${prop.Name_Property.replace(/'/g, "\\'")}', '${prop.Property_Type}', ${prop.Valuation || 0}, '${(prop.Description || '').replace(/'/g, "\\'")}')">
-                Edit
-            </button>
-            <button class="btn-danger" onclick="deleteProperty(${prop.id})">Delete</button>
-            </td>
-        </tr>
-      `;
-    });
-
-    html += '</tbody></table>';
     container.innerHTML = html;
+    const tbody = document.getElementById('property-table-body');
+
+    // Populate rows securely using DOM API / dataset binding
+    properties.forEach(prop => {
+      const manager = prop.Users 
+        ? `${prop.Users.Usr_Name || ''} ${prop.Users.Usr_Surname || ''}` 
+        : 'Unassigned';
+
+      const safeName = escapeHTML(prop.Name_Property);
+      const safeType = escapeHTML(prop.Property_Type || 'Cell Tower');
+      const safeValuation = prop.Valuation ? prop.Valuation.toLocaleString() : '0';
+      const safeDesc = escapeHTML(prop.Description || '-');
+      const safeManager = escapeHTML(manager);
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><strong>${safeName}</strong></td>
+        <td>${safeType}</td>
+        <td>R ${safeValuation}</td>
+        <td>${safeDesc}</td>
+        <td>${safeManager}</td>
+        <td>
+          <button class="btn-primary edit-btn" style="padding: 0.3rem 0.6rem; font-size: 0.85rem;">Edit</button>
+          <button class="btn-danger delete-btn">Delete</button>
+        </td>
+      `;
+
+      // Attach event listeners safely without inline string interpolation
+      const editBtn = tr.querySelector('.edit-btn');
+      editBtn.addEventListener('click', () => {
+        openEditModal(
+          prop.id, 
+          prop.Name_Property || '', 
+          prop.Property_Type || '', 
+          prop.Valuation || 0, 
+          prop.Description || ''
+        );
+      });
+
+      const deleteBtn = tr.querySelector('.delete-btn');
+      deleteBtn.addEventListener('click', () => {
+        deleteProperty(prop.id);
+      });
+
+      tbody.appendChild(tr);
+    });
 
   } catch (err) {
     console.error('Error loading data:', err);
-    container.innerHTML = `<p style="color:red">Failed to load data: ${err.message}</p>`;
+    container.innerHTML = `<p style="color:red">Failed to load data: ${escapeHTML(err.message)}</p>`;
   }
 }
 
 // Add Property
 window.addProperty = async function() {
-  const name = document.getElementById('prop-name').value;
-  const type = document.getElementById('prop-type').value;
+  const name = document.getElementById('prop-name').value.trim();
+  const type = document.getElementById('prop-type').value.trim();
   const val = parseInt(document.getElementById('prop-val').value, 10);
-  const desc = document.getElementById('prop-desc').value;
+  const desc = document.getElementById('prop-desc').value.trim();
 
   if (!name || isNaN(val)) {
     alert('Please enter a valid property name and valuation.');
@@ -138,6 +192,8 @@ window.deleteProperty = async function(id) {
     loadDashboardData();
   }
 };
+
+// Open Edit Modal
 window.openEditModal = function(id, name, type, val, desc) {
   document.getElementById('edit-prop-id').value = id;
   document.getElementById('edit-prop-name').value = name;
@@ -147,16 +203,18 @@ window.openEditModal = function(id, name, type, val, desc) {
   document.getElementById('edit-modal').style.display = 'flex';
 };
 
+// Close Edit Modal
 window.closeEditModal = () => {
   document.getElementById('edit-modal').style.display = 'none';
 };
 
+// Update Property
 window.updateProperty = async function() {
   const id = document.getElementById('edit-prop-id').value;
-  const name = document.getElementById('edit-prop-name').value;
-  const type = document.getElementById('edit-prop-type').value;
+  const name = document.getElementById('edit-prop-name').value.trim();
+  const type = document.getElementById('edit-prop-type').value.trim();
   const val = parseFloat(document.getElementById('edit-prop-val').value);
-  const desc = document.getElementById('edit-prop-desc').value;
+  const desc = document.getElementById('edit-prop-desc').value.trim();
 
   if (!name || isNaN(val)) {
     alert('Please enter a valid property name and valuation.');
@@ -180,9 +238,12 @@ window.updateProperty = async function() {
     loadDashboardData();
   }
 };
+
 // UI Helpers
 window.openModal = () => document.getElementById('property-modal').style.display = 'flex';
 window.closeModal = () => document.getElementById('property-modal').style.display = 'none';
+
+// Logout Handler
 window.logout = () => {
   localStorage.clear();
   window.location.href = 'login.html';

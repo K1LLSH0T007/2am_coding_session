@@ -1,5 +1,10 @@
 import { supabase } from './connection.js';
 
+//activate session if user is already logged in
+const activeSession = localStorage.getItem('currentUser');
+if (activeSession) {
+  window.location.href = 'dashboard.html';
+}
 document.getElementById('login-btn').addEventListener('click', login);
 
 async function login(e) {
